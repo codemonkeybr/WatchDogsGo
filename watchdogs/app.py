@@ -192,6 +192,23 @@ MENU_CATS = [
     ]),
 ]
 
+# Global per-category shortcut keys — letters drawn from each category's
+# own word, chosen to avoid every existing single-key binding in the game
+# (the global stop key, cluster nav, attack-mode keys, dialog Yes/No).
+# Used by _handle_menu_category_shortcuts() (menu closed -> open+jump) and
+# by _update_menu()'s category-tab fallback (menu already open -> switch
+# tab), and rendered as a "[x]" prefix on each tab in _draw_menu().
+MENU_CAT_SHORTCUTS = (
+    (pyxel.KEY_A, "SCAN"),
+    (pyxel.KEY_I, "SNIFF"),
+    (pyxel.KEY_T, "ATTACK"),
+    (pyxel.KEY_O, "ADDONS"),
+    (pyxel.KEY_M, "SYSTEM"),
+    (pyxel.KEY_P, "PLUGINS"),
+)
+# cat name -> "[x]" display prefix, e.g. {"SCAN": "[a]", ...}
+_MENU_CAT_HINT = {name: f"[{chr(key)}]" for key, name in MENU_CAT_SHORTCUTS}
+
 # BLE device line regex (from JanOS bt_wardriving)
 # Groups: 1=MAC, 2=RSSI, 3=Name (optional), 4=[AirTag]/[SmartTag] (optional)
 _BLE_RE = re.compile(
@@ -1581,15 +1598,7 @@ class WatchDogsGame:
         """
         if self._attack_mode:
             return  # don't pop the menu over a live attack (deauth/evil-twin/etc.)
-        _CAT_KEYS = (
-            (pyxel.KEY_A, "SCAN"),
-            (pyxel.KEY_I, "SNIFF"),
-            (pyxel.KEY_T, "ATTACK"),
-            (pyxel.KEY_O, "ADDONS"),
-            (pyxel.KEY_M, "SYSTEM"),
-            (pyxel.KEY_P, "PLUGINS"),
-        )
-        for key, cat_name in _CAT_KEYS:
+        for key, cat_name in MENU_CAT_SHORTCUTS:
             if pyxel.btnp(key):
                 idx = self._menu_cat_idx.get(cat_name)
                 if idx is not None:   # no-op if PLUGINS tab doesn't exist
@@ -1621,7 +1630,20 @@ class WatchDogsGame:
             if hk is not None and pyxel.btnp(hk):
                 self.menu_sel = i
                 self._activate_menu_item(self.menu_cat, i)
-                break
+                return
+        # Category-tab shortcuts: jump straight to another tab, same as
+        # Left/Right-arrowing to it. Only reached if nothing in the loop
+        # above matched — i.e. an item hotkey in the CURRENT category
+        # always wins over a same-lettered category shortcut (e.g. [m]
+        # still activates MITM while browsing ATTACK, but jumps to
+        # SYSTEM from any category that has no [m] item of its own).
+        for key, cat_name in MENU_CAT_SHORTCUTS:
+            if pyxel.btnp(key):
+                idx = self._menu_cat_idx.get(cat_name)
+                if idx is not None and idx != self.menu_cat:
+                    self.menu_cat = idx
+                    self.menu_sel = 0
+                return
 
     def _activate_menu_item(self, cat_idx: int, item_idx: int):
         _, items = MENU_CATS[cat_idx]
@@ -5033,12 +5055,13 @@ class WatchDogsGame:
         for i, (cat_name, _items) in enumerate(MENU_CATS):
             tx = PX + i * cat_w
             sel = (i == self.menu_cat)
+            label = _MENU_CAT_HINT.get(cat_name, "") + cat_name[:6]
             if sel:
                 pyxel.rect(tx, TAB_Y - 1, cat_w - 1, TAB_H, C_HACK_CYAN)
-                pyxel.text(tx + 3, TAB_Y + 2, cat_name[:6], 0)
+                pyxel.text(tx + 3, TAB_Y + 2, label, 0)
             else:
                 pyxel.rectb(tx, TAB_Y - 1, cat_w - 1, TAB_H, C_COAST)
-                pyxel.text(tx + 3, TAB_Y + 2, cat_name[:6], C_DIM)
+                pyxel.text(tx + 3, TAB_Y + 2, label, C_DIM)
 
         # Item list — 13px tall rows
         _, items = MENU_CATS[self.menu_cat]
