@@ -1581,6 +1581,15 @@ class WatchDogsGame:
             self.menu_sel = (self.menu_sel + 1) % len(items)
         if pyxel.btnp(pyxel.KEY_RETURN):
             self._activate_menu_item(self.menu_cat, self.menu_sel)
+            return
+        # Hotkey shortcuts: pressing the key shown as "[x]" activates that
+        # item directly, same as arrow-navigating to it and hitting Enter.
+        for i, (hotkey, _label, _cmd, _state_key, _input_type) in enumerate(items):
+            hk = getattr(pyxel, f"KEY_{hotkey.upper()}", None)
+            if hk is not None and pyxel.btnp(hk):
+                self.menu_sel = i
+                self._activate_menu_item(self.menu_cat, i)
+                break
 
     def _activate_menu_item(self, cat_idx: int, item_idx: int):
         _, items = MENU_CATS[cat_idx]
