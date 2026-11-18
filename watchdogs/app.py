@@ -207,7 +207,7 @@ MENU_CAT_SHORTCUTS = (
     (pyxel.KEY_P, "PLUGINS"),
 )
 # cat name -> "[x]" display prefix, e.g. {"SCAN": "[a]", ...}
-_MENU_CAT_HINT = {name: f"[{chr(key)}]" for key, name in MENU_CAT_SHORTCUTS}
+_MENU_CAT_HINT = {name: f"[{chr(key)}] " for key, name in MENU_CAT_SHORTCUTS}
 
 # BLE device line regex (from JanOS bt_wardriving)
 # Groups: 1=MAC, 2=RSSI, 3=Name (optional), 4=[AirTag]/[SmartTag] (optional)
