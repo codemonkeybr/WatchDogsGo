@@ -716,6 +716,11 @@ class WatchDogsGame:
         self.menu_open = False
         self.menu_cat = 0       # selected category index
         self.menu_sel = 0       # selected item index within category
+        # Name -> index map for MENU_CATS, built once it's finalized
+        # (PLUGINS, if any, was appended earlier during plugin discovery).
+        # Used by the global per-category hotkeys below so lookups stay
+        # correct even if MENU_CATS is ever reordered.
+        self._menu_cat_idx = {name: i for i, (name, _items) in enumerate(MENU_CATS)}
         self._pending_cmd = None
         self._pending_cmd_frame = 0
         self._pending_cmd_name = ""
@@ -1487,6 +1492,7 @@ class WatchDogsGame:
                     self._attack_scan_results = []
                     self.msg("[STOP] All operations stopped", C_WARNING)
                     self.glitch_timer = 3
+                self._handle_menu_category_shortcuts()
                 # Manual pan (disabled when cluster is selected — arrows navigate clusters)
                 if self._cluster_sel < 0:
                     speed = self.proj.lon_span / W * 3
@@ -1565,6 +1571,32 @@ class WatchDogsGame:
                 self.menu_open = False
             else:
                 self.confirm_quit = True
+
+    def _handle_menu_category_shortcuts(self):
+        """Global per-category hotkeys, active only on the plain map screen
+        with the Tab-menu closed (see call site in _update()). Pressing one
+        of these opens the menu already switched to that category — same
+        end state as Tab, then Left/Right-arrowing to it — with menu_sel
+        reset to 0, same as the KEY_TAB open-path at _update()'s top.
+        """
+        if self._attack_mode:
+            return  # don't pop the menu over a live attack (deauth/evil-twin/etc.)
+        _CAT_KEYS = (
+            (pyxel.KEY_A, "SCAN"),
+            (pyxel.KEY_I, "SNIFF"),
+            (pyxel.KEY_T, "ATTACK"),
+            (pyxel.KEY_O, "ADDONS"),
+            (pyxel.KEY_M, "SYSTEM"),
+            (pyxel.KEY_P, "PLUGINS"),
+        )
+        for key, cat_name in _CAT_KEYS:
+            if pyxel.btnp(key):
+                idx = self._menu_cat_idx.get(cat_name)
+                if idx is not None:   # no-op if PLUGINS tab doesn't exist
+                    self.menu_open = True
+                    self.menu_cat = idx
+                    self.menu_sel = 0
+                return
 
     def _update_menu(self):
         _, items = MENU_CATS[self.menu_cat]
@@ -4838,7 +4870,10 @@ class WatchDogsGame:
             dots = "." * ((pyxel.frame_count // 10) % 4)
             pyxel.text(270, y, " ".join(tools) + dots, 12)
         elif not self.menu_open:
-            pyxel.text(270, y, "[TAB]Menu [`]Loot [S]Stop", C_COAST)
+            hints = ["[a]Scan", "[i]Sniff", "[t]Attack", "[o]Addons", "[m]System"]
+            if "PLUGINS" in self._menu_cat_idx:
+                hints.append("[p]Plugins")
+            pyxel.text(270, y, " ".join(hints), C_COAST)
 
         # GPS status — "DD.DDDDDS DDD.DDDDDW" = 20 chars × 5 = 100px
         if self.gps_fix:
