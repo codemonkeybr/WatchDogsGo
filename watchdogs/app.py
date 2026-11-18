@@ -415,6 +415,10 @@ class WatchDogsGame:
                     _t.sleep(6)  # ESP32 boot + USB enumerate on CM5
 
         # Open serial (with probe retry for cold-boot)
+        # Remember an explicitly-passed port (a PTY bridge like
+        # wdg_wifi_bridge.py, or a specific device path) so reconnects
+        # target it instead of falling back to a real-ESP32-only USB scan.
+        self._configured_port = serial_port
         port = serial_port or detect_esp32_port()
         if not port and self._usb_enabled:
             # USB just powered on — port may not be visible yet, retry
@@ -1247,8 +1251,15 @@ class WatchDogsGame:
                 self._mitm_log = self._mitm_log[-500:]
 
     def _try_reconnect_esp32(self) -> bool:
-        """Try to detect and reconnect ESP32. Like JanOS wait_for_esp32."""
-        port = detect_esp32_port()
+        """Try to detect and reconnect ESP32. Like JanOS wait_for_esp32.
+
+        If the game was launched with an explicit port (a PTY bridge such
+        as wdg_wifi_bridge.py, or a specific device path), always retry
+        that same port — a USB VID/PID scan would never find a PTY, and
+        would be wrong to substitute a different device anyway. Only fall
+        back to the USB scan when no explicit port was configured.
+        """
+        port = self._configured_port or detect_esp32_port()
         if not port:
             return False
         try:
