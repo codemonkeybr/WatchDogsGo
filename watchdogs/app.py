@@ -195,6 +195,12 @@ MENU_CATS = [
     ]),
 ]
 
+# state_key values that use the Bluetooth radio rather than WiFi — kept
+# separate so starting/stopping one scan family never starts/stops the
+# other. Checked by _start_scan_cmd()/_execute_item() to let WiFi and BT
+# operations (e.g. WiFi Wardrive + BT Wardrive) run concurrently.
+_BT_RADIO_STATE_KEYS = ("bt_scanning", "ble_scan", "bt_tracking", "bt_airtag")
+
 # BLE device line regex (from JanOS bt_wardriving)
 # Groups: 1=MAC, 2=RSSI, 3=Name (optional), 4=[AirTag]/[SmartTag] (optional)
 _BLE_RE = re.compile(
@@ -732,6 +738,10 @@ class WatchDogsGame:
         self._pending_cmd = None
         self._pending_cmd_frame = 0
         self._pending_cmd_name = ""
+        # Which radio family ("wifi"/"bt") an in-flight explicit stop
+        # targets — see _execute_item()'s stop branch and the "all
+        # stopped" handling in _handle_serial_line().
+        self._stop_target_family: str | None = None
 
         # Input dialog (for commands needing params)
         self.input_mode = False
@@ -1503,6 +1513,7 @@ class WatchDogsGame:
                     self.capturing_hs = False
                     self._wifi_scan_done_time = 0.0
                     self._bt_scan_done_time = 0.0
+                    self._stop_target_family = None
                     self._gps_wait = False
                     self._gps_wait_cmd = ""
                     # Stop Python-native attacks
@@ -1660,6 +1671,7 @@ class WatchDogsGame:
             self.capturing_hs = False
             self._wifi_scan_done_time = 0.0
             self._bt_scan_done_time = 0.0
+            self._stop_target_family = None
             self._gps_wait = False
             self._gps_wait_cmd = ""
             # Stop Python-native attacks
@@ -1784,6 +1796,13 @@ class WatchDogsGame:
         final_cmd = (cmd + " " + " ".join(v for v in field_values if v)
                      if field_values else cmd)
         if running:
+            # Record which radio this stop targets so the "all stopped"
+            # echo (_handle_serial_line) only clears that radio's state —
+            # otherwise stopping e.g. BT Wardrive would also wipe out a
+            # still-running WiFi Wardrive, since the device's stop
+            # acknowledgement line doesn't say which operation it was for.
+            self._stop_target_family = (
+                "bt" if state_key in _BT_RADIO_STATE_KEYS else "wifi")
             self._send("stop")
             self.msg(f"[STOP] {name}", C_DIM)
             self._set_running(state_key, False)
@@ -1795,25 +1814,43 @@ class WatchDogsGame:
         else:
             self._start_scan_cmd(final_cmd, state_key, name)
 
-    def _anything_running_on_esp(self) -> bool:
-        """True if any ESP32 operation is currently active."""
-        return (self.wifi_scanning or self.ble_scanning
-                or self._wifi_scan_only or self._ble_scan_only
-                or self._bt_tracking or self._bt_airtag
+    def _bt_radio_busy(self) -> bool:
+        """True if a Bluetooth-radio operation is active (BT/AirTag scan,
+        BT wardrive, BT tracker)."""
+        return (self.ble_scanning or self._ble_scan_only
+                or self._bt_tracking or self._bt_airtag)
+
+    def _wifi_radio_busy(self) -> bool:
+        """True if a WiFi-radio operation is active (WiFi scan/wardrive,
+        sniffer, handshake capture, Evil Twin/Portal)."""
+        return (self.wifi_scanning or self._wifi_scan_only
                 or self.sniffing or self.capturing_hs
                 or self.state.portal_running
                 or self.state.evil_twin_running)
 
+    def _anything_running_on_esp(self) -> bool:
+        """True if any ESP32 operation is currently active (either radio)."""
+        return self._wifi_radio_busy() or self._bt_radio_busy()
+
     def _start_scan_cmd(self, final_cmd: str, state_key: str, name: str):
-        """Start an ESP32 command. Send stop first only if something is running."""
-        if self._anything_running_on_esp():
-            # Something running — stop first, then send after delay
+        """Start an ESP32 command.
+
+        Send stop first only if something on the SAME radio is already
+        running. WiFi and Bluetooth are independent radios (wlan0 + hci0
+        on the AIO v2 bridge; separate hardware on a real ESP32), so e.g.
+        starting BT Wardrive while WiFi Wardrive is active doesn't need
+        — and shouldn't send — a global stop; the two run concurrently.
+        """
+        same_radio_busy = (self._bt_radio_busy() if state_key in _BT_RADIO_STATE_KEYS
+                            else self._wifi_radio_busy())
+        if same_radio_busy:
+            # Something on the same radio running — stop first, then send after delay
             self._send("stop")
             self._pending_cmd = final_cmd
             self._pending_cmd_frame = pyxel.frame_count + 15  # ~500ms
             self._pending_cmd_name = name
         else:
-            # Nothing running — send directly
+            # Nothing on this radio running — send directly
             self._send(final_cmd)
             self.msg(f"[START] {name}...", C_HACK_CYAN)
             self.glitch_timer = 5
@@ -3478,16 +3515,27 @@ class WatchDogsGame:
             self.capturing_hs = True
         elif "stop command" in sl or "all stopped" in sl:
             if not self._pending_cmd:
-                self.wifi_scanning = False
-                self.ble_scanning = False
-                self._wifi_scan_only = False
-                self._ble_scan_only = False
-                self._bt_tracking = False
-                self._bt_airtag = False
-                self._airtag_count = 0
-                self._smarttag_count = 0
-                self._wifi_scan_done_time = 0.0
-                self._bt_scan_done_time = 0.0
+                # Scope the clear to whichever radio an explicit stop
+                # targeted (set by _execute_item()) so stopping e.g. BT
+                # Wardrive doesn't also clear a still-running WiFi
+                # Wardrive. No target recorded (global "S" stop, a
+                # device-initiated stop, or a crash recovery) means this
+                # wasn't a single-operation stop — clear both, same as
+                # before.
+                target = self._stop_target_family
+                if target in ("wifi", None):
+                    self.wifi_scanning = False
+                    self._wifi_scan_only = False
+                    self._wifi_scan_done_time = 0.0
+                if target in ("bt", None):
+                    self.ble_scanning = False
+                    self._ble_scan_only = False
+                    self._bt_tracking = False
+                    self._bt_airtag = False
+                    self._airtag_count = 0
+                    self._smarttag_count = 0
+                    self._bt_scan_done_time = 0.0
+            self._stop_target_family = None
             self.sniffing = False
             self.capturing_hs = False
 
