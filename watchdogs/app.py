@@ -21,7 +21,10 @@ from pathlib import Path
 
 import pyxel
 
-from .serial_manager import SerialManager, detect_esp32_port
+from .serial_manager import (
+    SerialManager, detect_esp32_port, detect_aiov2_bridge_port,
+    AIOV2_BRIDGE_PTY,
+)
 from .gps_manager import GpsManager
 from .loot_manager import LootManager
 from .app_state import AppState, Network
@@ -407,6 +410,15 @@ class WatchDogsGame:
                 port = detect_esp32_port()
                 if port:
                     break
+        # No physical ESP32 found — fall back to the AIO v2 WiFi+BLE
+        # bridge (aiov2-wifi-bridge.service) if it's running. The bridge
+        # speaks the exact same serial protocol over a PTY using the
+        # uConsole's own WiFi/BT, so the connect logic below treats it
+        # exactly like an ESP32 once opened. A real ESP32 always wins
+        # when both are present.
+        if not port:
+            port = detect_aiov2_bridge_port()
+        self._via_aiov2_bridge = (port == AIOV2_BRIDGE_PTY)
         if port:
             try:
                 self.serial = SerialManager(port)
@@ -429,6 +441,7 @@ class WatchDogsGame:
                 self.serial.serial_conn.reset_input_buffer()
             except Exception as e:
                 self._esp32 = False
+                self._via_aiov2_bridge = False
                 self._term_add(f"[ERR] Serial {port}: {e}", raw=True)
         else:
             self._esp32 = False
@@ -1012,7 +1025,10 @@ class WatchDogsGame:
         # ESP32
         if self._esp32:
             fw_info = f" (FW: v{self._fw_version})" if self._fw_version else ""
-            checks.append((f"  ESP32 on {self._boot_serial_port}{fw_info}", C_SUCCESS))
+            if self._via_aiov2_bridge:
+                checks.append((f"  ESP32 — not found, using AIO v2 WiFi/BT bridge{fw_info}", C_SUCCESS))
+            else:
+                checks.append((f"  ESP32 on {self._boot_serial_port}{fw_info}", C_SUCCESS))
         else:
             checks.append(("  ESP32 — not connected", C_WARNING))
 
@@ -1086,7 +1102,12 @@ class WatchDogsGame:
         self._term_add("[SYS] ESP32 Watch Dogs v1.0", raw=True)
         self._term_add("[SYS] TAB=menu  SPACE=hack  =/]=zoom+  -/[=zoom-", raw=True)
         if self._esp32:
-            self._term_add(f"[OK] ESP32 connected on {port}", raw=True)
+            if self._via_aiov2_bridge:
+                self._term_add(
+                    f"[OK] No ESP32 — using AIO v2 WiFi/BT bridge on {port}",
+                    raw=True)
+            else:
+                self._term_add(f"[OK] ESP32 connected on {port}", raw=True)
             # Probe firmware version
             if not self._fw_version:
                 try:
@@ -1225,17 +1246,28 @@ class WatchDogsGame:
                 self._mitm_log = self._mitm_log[-500:]
 
     def _try_reconnect_esp32(self) -> bool:
-        """Try to detect and reconnect ESP32. Like JanOS wait_for_esp32."""
-        port = detect_esp32_port()
+        """Try to detect and reconnect ESP32. Like JanOS wait_for_esp32.
+
+        Falls back to the AIO v2 WiFi+BLE bridge (see
+        detect_aiov2_bridge_port()) when no real ESP32 is found — same
+        ESP32-first priority as the initial boot connection in __init__.
+        """
+        port = detect_esp32_port() or detect_aiov2_bridge_port()
         if not port:
             return False
         try:
             self.serial = SerialManager(port)
             self.serial.setup()
             self._esp32 = True
+            self._via_aiov2_bridge = (port == AIOV2_BRIDGE_PTY)
             self.state.connected = True
             self._boot_serial_port = port
-            self._term_add(f"[SYS] ESP32 found on {port}", raw=True)
+            if self._via_aiov2_bridge:
+                self._term_add(
+                    f"[SYS] No ESP32 — using AIO v2 WiFi/BT bridge on {port}",
+                    raw=True)
+            else:
+                self._term_add(f"[SYS] ESP32 found on {port}", raw=True)
             # Probe firmware version
             if not self._fw_version:
                 try:

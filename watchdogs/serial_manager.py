@@ -1,6 +1,7 @@
 """Serial communication with ESP32-C5 device."""
 
 import os
+import stat
 import sys
 import time
 import logging
@@ -12,6 +13,29 @@ import serial.tools.list_ports
 from .config import BAUD_RATE, READ_TIMEOUT, SCAN_TIMEOUT, CRASH_KEYWORDS
 
 log = logging.getLogger(__name__)
+
+# PTY path created by the AIO v2 WiFi+BLE bridge (wdg_wifi_bridge.py,
+# normally run as the aiov2-wifi-bridge.service unit) when it emulates
+# the ESP32 projectZero serial protocol over the uConsole's own WiFi
+# (wlan0) + BT (hci0) instead of a physical ESP32. See
+# detect_aiov2_bridge_port() — used only as a fallback when no real
+# ESP32 is found, never in place of it.
+AIOV2_BRIDGE_PTY = "/tmp/aiov2-pty"
+
+
+def detect_aiov2_bridge_port() -> Optional[str]:
+    """Return AIOV2_BRIDGE_PTY if the AIO v2 bridge is running and has
+    created it there, else None.
+
+    Once opened, the bridge speaks the exact same serial protocol an
+    ESP32 would, so callers can treat the returned path like any other
+    ESP32 port.
+    """
+    try:
+        return AIOV2_BRIDGE_PTY if stat.S_ISCHR(os.stat(AIOV2_BRIDGE_PTY).st_mode) else None
+    except OSError:
+        return None
+
 
 # Known USB VID:PID pairs for ESP32 USB-UART bridges
 _ESP32_VID_PIDS: List[Tuple[int, int]] = [
