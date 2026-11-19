@@ -3336,9 +3336,15 @@ class WatchDogsGame:
             if _vm:
                 self._fw_version = _vm.group(1)
                 self._term_add(f"[FW] Firmware v{self._fw_version}", raw=True)
-                # Trigger background GitHub check
-                threading.Thread(target=self._check_fw_update,
-                                 daemon=True).start()
+                # Trigger background GitHub check — only meaningful for a
+                # real ESP32. The AIO v2 bridge reports its own unrelated
+                # version string (see wdg_wifi_bridge.py's FIRMWARE_VERSION),
+                # which has nothing to do with the projectZero firmware
+                # releases this check compares against, and there's no
+                # ESP32 to flash an update onto anyway.
+                if not self._via_aiov2_bridge:
+                    threading.Thread(target=self._check_fw_update,
+                                     daemon=True).start()
 
         # Log to loot (handles PCAP/HCCAPX detection internally)
         if self.loot:
