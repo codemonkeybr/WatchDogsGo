@@ -738,10 +738,6 @@ class WatchDogsGame:
         self._pending_cmd = None
         self._pending_cmd_frame = 0
         self._pending_cmd_name = ""
-        # Which radio family ("wifi"/"bt") an in-flight explicit stop
-        # targets — see _execute_item()'s stop branch and the "all
-        # stopped" handling in _handle_serial_line().
-        self._stop_target_family: str | None = None
 
         # Input dialog (for commands needing params)
         self.input_mode = False
@@ -1513,7 +1509,6 @@ class WatchDogsGame:
                     self.capturing_hs = False
                     self._wifi_scan_done_time = 0.0
                     self._bt_scan_done_time = 0.0
-                    self._stop_target_family = None
                     self._gps_wait = False
                     self._gps_wait_cmd = ""
                     # Stop Python-native attacks
@@ -1671,7 +1666,6 @@ class WatchDogsGame:
             self.capturing_hs = False
             self._wifi_scan_done_time = 0.0
             self._bt_scan_done_time = 0.0
-            self._stop_target_family = None
             self._gps_wait = False
             self._gps_wait_cmd = ""
             # Stop Python-native attacks
@@ -1796,13 +1790,6 @@ class WatchDogsGame:
         final_cmd = (cmd + " " + " ".join(v for v in field_values if v)
                      if field_values else cmd)
         if running:
-            # Record which radio this stop targets so the "all stopped"
-            # echo (_handle_serial_line) only clears that radio's state —
-            # otherwise stopping e.g. BT Wardrive would also wipe out a
-            # still-running WiFi Wardrive, since the device's stop
-            # acknowledgement line doesn't say which operation it was for.
-            self._stop_target_family = (
-                "bt" if state_key in _BT_RADIO_STATE_KEYS else "wifi")
             self._send("stop")
             self.msg(f"[STOP] {name}", C_DIM)
             self._set_running(state_key, False)
@@ -3514,28 +3501,13 @@ class WatchDogsGame:
         elif "handshake" in sl and ("start" in sl or "captur" in sl):
             self.capturing_hs = True
         elif "stop command" in sl or "all stopped" in sl:
-            if not self._pending_cmd:
-                # Scope the clear to whichever radio an explicit stop
-                # targeted (set by _execute_item()) so stopping e.g. BT
-                # Wardrive doesn't also clear a still-running WiFi
-                # Wardrive. No target recorded (global "S" stop, a
-                # device-initiated stop, or a crash recovery) means this
-                # wasn't a single-operation stop — clear both, same as
-                # before.
-                target = self._stop_target_family
-                if target in ("wifi", None):
-                    self.wifi_scanning = False
-                    self._wifi_scan_only = False
-                    self._wifi_scan_done_time = 0.0
-                if target in ("bt", None):
-                    self.ble_scanning = False
-                    self._ble_scan_only = False
-                    self._bt_tracking = False
-                    self._bt_airtag = False
-                    self._airtag_count = 0
-                    self._smarttag_count = 0
-                    self._bt_scan_done_time = 0.0
-            self._stop_target_family = None
+            # WiFi/BT scan+wardrive state is cleared explicitly at the
+            # point each one is toggled off (_execute_item) or on a
+            # global stop (the "S" key, STOP ALL) — never from this
+            # generic device acknowledgement. It doesn't say which
+            # operation(s) it was for, so acting on it here would clear
+            # a still-running op just because a *different* one was
+            # independently stopped.
             self.sniffing = False
             self.capturing_hs = False
 
